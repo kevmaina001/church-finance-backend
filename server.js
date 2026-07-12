@@ -39,6 +39,17 @@ app.use(bodyParser.urlencoded({ extended: true }));
 // Database Connection
 connectDB();
 
+// Health check
+const mongoose = require('mongoose');
+app.get('/health', (req, res) => {
+  const dbConnected = mongoose.connection.readyState === 1; // 1 = connected
+  res.status(dbConnected ? 200 : 503).json({
+    status: dbConnected ? 'ok' : 'degraded',
+    db: dbConnected ? 'connected' : 'disconnected',
+    uptime: process.uptime(),
+  });
+});
+
 // Routes
 app.use('/api/users', userRoutes);
 app.use('/api/incomes', incomeRoutes);
