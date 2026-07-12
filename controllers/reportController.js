@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Income = require('../models/Income');
 const Expenditure = require('../models/Expenditure');
 const ExcelJS = require('exceljs');
@@ -12,6 +13,8 @@ exports.getReports = async (req, res) => {
       return res.status(400).json({ message: 'Invalid report type' });
     }
     let query = { tenantId: req.user.tenantId };
+    // Optional scope to a single local church
+    if (req.query.localChurch) query.localChurch = req.query.localChurch;
     if (type === 'income') {
       query.date = {
         $gte: new Date(startDate),
@@ -42,7 +45,11 @@ exports.getAggregatedReports = async (req, res) => {
     if (!['income', 'expenditure'].includes(type)) {
       return res.status(400).json({ message: 'Invalid report type' });
     }
-    let matchStage = { tenantId: req.user.tenantId };
+    // aggregate() does not auto-cast strings to ObjectId the way find() does,
+    // so tenantId must be cast explicitly or the $match returns nothing.
+    let matchStage = { tenantId: new mongoose.Types.ObjectId(req.user.tenantId) };
+    // Optional scope to a single local church
+    if (req.query.localChurch) matchStage.localChurch = new mongoose.Types.ObjectId(req.query.localChurch);
     if (type === 'income') {
       matchStage.date = {
         $gte: new Date(startDate),
@@ -100,6 +107,8 @@ exports.downloadReport = async (req, res) => {
   try {
     const { type, format, startDate, endDate } = req.query;
     let query = { tenantId: req.user.tenantId };
+    // Optional scope to a single local church
+    if (req.query.localChurch) query.localChurch = req.query.localChurch;
     if (type === 'income') {
       query.date = {
         $gte: new Date(startDate),
@@ -196,12 +205,15 @@ exports.downloadAggregatedReport = async (req, res) => {
   try {
     const { type, format, startDate, endDate } = req.query;
     const matchStage = {
-      tenantId: req.user.tenantId,
+      // Cast tenantId to ObjectId — aggregate() does not auto-cast like find().
+      tenantId: new mongoose.Types.ObjectId(req.user.tenantId),
       createdAt: {
         $gte: new Date(startDate),
         $lte: new Date(endDate + 'T23:59:59.999Z')
       }
     };
+    // Optional scope to a single local church
+    if (req.query.localChurch) matchStage.localChurch = new mongoose.Types.ObjectId(req.query.localChurch);
     let groupField, lookupField, model;
     if (type === 'income') {
       groupField = 'revenueSource';
