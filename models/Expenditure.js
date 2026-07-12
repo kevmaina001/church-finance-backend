@@ -9,6 +9,7 @@ const expenditureSchema = new mongoose.Schema({
   createdAt: { type: Date, default: Date.now },
   user: { type: String, required: true }, // Store user name from `req.user`
   assetAccount: { type: mongoose.Schema.Types.ObjectId, ref: 'Account', required: true }, // Asset account (Cash/Bank)
+  localChurch: { type: mongoose.Schema.Types.ObjectId, ref: 'LocalChurch' }, // Which local church this expenditure belongs to (optional = parish-general)
   tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true },
 });
 

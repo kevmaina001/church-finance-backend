@@ -7,6 +7,7 @@ const incomeSchema = new mongoose.Schema(
     description: { type: String },
     user: { type: String, required: true }, // Add user field
     assetAccount: { type: mongoose.Schema.Types.ObjectId, ref: 'Account', required: true }, // Asset account (Cash/Bank)
+    localChurch: { type: mongoose.Schema.Types.ObjectId, ref: 'LocalChurch' }, // Which local church this income belongs to (optional = parish-general)
     date: { type: Date, default: Date.now },
     year: { type: Number, required: true },
     tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true },

@@ -10,11 +10,11 @@ exports.addExpenditure = async (req, res) => {
       throw new Error('User not authenticated'); // Explicit error if req.user is undefined
     }
 
-    const { votehead, amount, description, year, assetAccount, date } = req.body;
+    const { votehead, amount, description, year, assetAccount, date, localChurch } = req.body;
     const user = req.user.name; // Retrieve user name from req.user
 
     // Create a new Expenditure record, using the provided date or defaulting to now
-    const expenditure = new Expenditure({ votehead, amount, description, year, user, assetAccount, tenantId: req.user.tenantId, date: date || new Date() });
+    const expenditure = new Expenditure({ votehead, amount, description, year, user, assetAccount, localChurch: localChurch || undefined, tenantId: req.user.tenantId, date: date || new Date() });
     await expenditure.save();
 
     // Fetch the votehead to get the linked expense account
@@ -59,8 +59,14 @@ exports.addExpenditure = async (req, res) => {
 
 exports.getExpenditures = async (req, res) => {
   try {
-    const expenditures = await Expenditure.find({ tenantId: req.user.tenantId })
-      .populate({ path: 'votehead', select: 'name', options: { strictPopulate: false } });
+    const filter = { tenantId: req.user.tenantId };
+    // Optional filter by local church (?localChurch=<id>)
+    if (req.query.localChurch) {
+      filter.localChurch = req.query.localChurch;
+    }
+    const expenditures = await Expenditure.find(filter)
+      .populate({ path: 'votehead', select: 'name', options: { strictPopulate: false } })
+      .populate({ path: 'localChurch', select: 'name', options: { strictPopulate: false } });
     res.status(200).json({ expenditures });
   } catch (error) {
     res.status(500).json({ message: error.message });

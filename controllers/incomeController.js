@@ -7,10 +7,10 @@ exports.addIncome = async (req, res) => {
     if (!req.user) {
       throw new Error('User not authenticated');
     }
-    const { revenueSource, amount, description, year, assetAccount } = req.body;
+    const { revenueSource, amount, description, year, assetAccount, localChurch } = req.body;
     const user = req.user.name;
     // Save the income record
-    const income = new Income({ revenueSource, amount, description, year, user, assetAccount, tenantId: req.user.tenantId });
+    const income = new Income({ revenueSource, amount, description, year, user, assetAccount, localChurch: localChurch || undefined, tenantId: req.user.tenantId });
     await income.save();
     // Fetch the revenue source to get the linked revenue account
     const revenueSourceDoc = await RevenueSource.findOne({_id: revenueSource, tenantId: req.user.tenantId}).populate('account');
@@ -52,7 +52,14 @@ exports.addIncome = async (req, res) => {
 
 exports.getIncomes = async (req, res) => {
   try {
-    const incomes = await Income.find({ tenantId: req.user.tenantId }).populate('revenueSource', 'name'); // Populate revenueSource with its name
+    const filter = { tenantId: req.user.tenantId };
+    // Optional filter by local church (?localChurch=<id>)
+    if (req.query.localChurch) {
+      filter.localChurch = req.query.localChurch;
+    }
+    const incomes = await Income.find(filter)
+      .populate('revenueSource', 'name')
+      .populate({ path: 'localChurch', select: 'name', options: { strictPopulate: false } });
     res.status(200).json({ incomes });
   } catch (error) {
     res.status(500).json({ message: error.message });

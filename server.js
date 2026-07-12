@@ -14,6 +14,7 @@ const journalEntryRoutes = require('./routes/journalEntryRoutes');
 const revenueSourceRoutes = require('./routes/revenueSourceRoutes');
 const accountingRoutes = require('./routes/accountingRoutes');
 const tenantRoutes = require('./routes/tenantRoutes');
+const localChurchRoutes = require('./routes/localChurchRoutes');
 const app = express();
 
 
@@ -64,6 +65,7 @@ app.use('/api/journal-entries', journalEntryRoutes);
 app.use('/api/revenue-sources', revenueSourceRoutes);
 app.use('/api/accounting', accountingRoutes);
 app.use('/api/tenants', tenantRoutes);
+app.use('/api/local-churches', localChurchRoutes);
 
 
 
