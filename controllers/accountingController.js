@@ -153,59 +153,89 @@ exports.getBalanceSheet = async (req, res) => {
   }
 };
 
-// Get Cash Flow Statement
+// Get Cash Flow Statement.
+// For every entry that moves cash/bank, the movement is classified by the type of the
+// counterpart account: revenue/expense -> operating, other assets -> investing,
+// liabilities/equity -> financing.
 exports.getCashFlowStatement = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
     const { tenantId } = req.user;
-    const query = { tenantId };
+    const query = { status: 'posted', tenantId };
+    if (req.query.localChurch) query.localChurch = req.query.localChurch;
     if (startDate && endDate) {
       query.date = {
         $gte: new Date(startDate),
         $lte: new Date(endDate)
       };
     }
-    let cashAccount = await Account.findOne({ name: 'Cash', isActive: true, tenantId });
-    if (!cashAccount) {
-      // Fallback: find any asset account with 'cash' in the name
-      cashAccount = await Account.findOne({ type: 'asset', name: /cash/i, isActive: true, tenantId });
+
+    // Money accounts = cash & bank (asset codes 1000-1099)
+    const moneyAccounts = await Account.find({ type: 'asset', tenantId, code: /^10/ });
+    if (moneyAccounts.length === 0) {
+      return res.status(404).json({ message: 'No cash/bank account found. Please set up a Cash or Bank account (code 1000-1099).' });
     }
-    if (!cashAccount) {
-      return res.status(404).json({ message: 'Cash account not found. Please ensure you have a cash account.' });
-    }
-    const journalEntries = await JournalEntry.find({
-      ...query,
-      status: 'posted'
-    }).populate('entries.account');
-    const cashFlows = journalEntries.map(entry => {
-      const cashEntry = entry.entries.find(line =>
-        line.account._id.toString() === cashAccount._id.toString()
-      );
-      if (cashEntry) {
-        return {
-          date: entry.date,
-          description: entry.description,
-          amount: cashEntry.debit - cashEntry.credit,
-          type: cashEntry.debit > cashEntry.credit ? 'inflow' : 'outflow'
-        };
+    const moneyIds = new Set(moneyAccounts.map(a => String(a._id)));
+
+    const journalEntries = await JournalEntry.find(query).populate('entries.account').sort({ date: 1 });
+
+    const classify = (type) => {
+      if (type === 'revenue' || type === 'expense') return 'operating';
+      if (type === 'asset') return 'investing';
+      if (type === 'liability' || type === 'equity') return 'financing';
+      return 'operating';
+    };
+
+    const operatingActivities = [];
+    const investingActivities = [];
+    const financingActivities = [];
+
+    for (const entry of journalEntries) {
+      let cashDelta = 0;
+      const counterpartLines = [];
+      for (const line of entry.entries) {
+        const accId = line.account && String(line.account._id || line.account);
+        if (accId && moneyIds.has(accId)) {
+          cashDelta += (line.debit || 0) - (line.credit || 0);
+        } else if (line.account) {
+          counterpartLines.push(line);
+        }
       }
-      return null;
-    }).filter(Boolean);
-    const operatingActivities = cashFlows.filter(flow =>
-      flow.description && flow.description.toLowerCase().includes('operating')
-    );
-    const investingActivities = cashFlows.filter(flow =>
-      flow.description && flow.description.toLowerCase().includes('investing')
-    );
-    const financingActivities = cashFlows.filter(flow =>
-      flow.description && flow.description.toLowerCase().includes('financing')
-    );
-    const netCashFlow = cashFlows.reduce((sum, flow) => sum + flow.amount, 0);
+      if (cashDelta === 0) continue; // entry doesn't affect cash
+
+      // Classify by the largest counterpart line
+      let category = 'operating';
+      if (counterpartLines.length) {
+        const primary = counterpartLines.reduce((a, b) =>
+          ((b.debit || 0) + (b.credit || 0)) > ((a.debit || 0) + (a.credit || 0)) ? b : a
+        );
+        category = classify(primary.account.type);
+      }
+
+      const flow = {
+        date: entry.date,
+        description: entry.description,
+        amount: cashDelta,
+        type: cashDelta > 0 ? 'inflow' : 'outflow',
+      };
+      if (category === 'investing') investingActivities.push(flow);
+      else if (category === 'financing') financingActivities.push(flow);
+      else operatingActivities.push(flow);
+    }
+
+    const sum = (arr) => arr.reduce((s, f) => s + f.amount, 0);
+    const netOperating = sum(operatingActivities);
+    const netInvesting = sum(investingActivities);
+    const netFinancing = sum(financingActivities);
+
     res.status(200).json({
-      operatingActivities: operatingActivities || [],
-      investingActivities: investingActivities || [],
-      financingActivities: financingActivities || [],
-      netCashFlow: netCashFlow || 0
+      operatingActivities,
+      investingActivities,
+      financingActivities,
+      netOperating,
+      netInvesting,
+      netFinancing,
+      netCashFlow: netOperating + netInvesting + netFinancing,
     });
   } catch (error) {
     res.status(500).json({ message: error.message || 'Failed to generate Cash Flow Statement.' });
