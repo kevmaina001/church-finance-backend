@@ -1,10 +1,10 @@
 const express = require('express');
-const { getBalance, updateBalance, initializeBalance } = require('../controllers/balanceController');
+const { getBalance } = require('../controllers/balanceController');
+const authenticate = require('../middlewares/auth');
 const router = express.Router();
 
-router.get('/', getBalance); // Correctly handling GET requests
-router.put('/', updateBalance);
-router.post('/initialize', initializeBalance); // Add this route for one-time initialization
-
+// Cash/bank position, derived from the ledger. Requires authentication (scoped to the tenant).
+// The old manual PUT/initialize endpoints were removed — balances are no longer set by hand.
+router.get('/', authenticate, getBalance);
 
 module.exports = router;

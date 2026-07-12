@@ -45,6 +45,7 @@ exports.addIncome = async (req, res) => {
         description: description || `Income for ${revenueSourceDoc.name}`,
         entries, totalDebit, totalCredit,
         status: 'posted', createdBy: user, tenantId,
+        localChurch: localChurch || undefined,
       }], { session });
     });
 
@@ -111,6 +112,7 @@ exports.updateIncome = async (req, res) => {
             date: income.date,
             description: income.description || `Income for ${revenueSourceDoc.name}`,
             entries, totalDebit, totalCredit, updatedAt: new Date(),
+            localChurch: income.localChurch || undefined,
           },
           $setOnInsert: { status: 'posted', createdBy: req.user.name },
         },

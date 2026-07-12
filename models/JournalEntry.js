@@ -20,6 +20,7 @@ const journalEntrySchema = new mongoose.Schema({
   createdBy: { type: String, required: true },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
+  localChurch: { type: mongoose.Schema.Types.ObjectId, ref: 'LocalChurch' }, // Which local church this entry belongs to (optional = parish-general)
   tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true },
 });
 

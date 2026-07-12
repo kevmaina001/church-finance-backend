@@ -1,43 +1,28 @@
-const Balance = require('../models/Balance');
+const Account = require('../models/Account');
+const JournalEntry = require('../models/JournalEntry');
+const { accountBalance } = require('../utils/ledger');
 
+// Cash/bank position is DERIVED from the ledger (single source of truth) rather than
+// stored as a manually-edited number. Cash & bank are the money accounts (codes 1000-1099).
 exports.getBalance = async (req, res) => {
-    try {
-      const balance = await Balance.findOne({ tenantId: req.user.tenantId });
-      if (!balance) return res.status(404).json({ message: "Balance not found for your tenant. Please initialize it." });
-      res.status(200).json({ balance });
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  };
-  
-
-exports.updateBalance = async (req, res) => {
   try {
-    const { bank, cash } = req.body;
-    let balance = await Balance.findOne({ tenantId: req.user.tenantId });
-    if (!balance) {
-      balance = new Balance({ bank, cash, tenantId: req.user.tenantId });
-    } else {
-      balance.bank = bank || balance.bank;
-      balance.cash = cash || balance.cash;
-    }
-    await balance.save();
-    res.status(200).json({ message: "Balance updated successfully", balance });
+    const { tenantId } = req.user;
+    const moneyAccounts = await Account.find({ type: 'asset', tenantId, code: /^10/ });
+    const journalEntries = await JournalEntry.find({ status: 'posted', tenantId }).populate('entries.account');
+
+    let cash = 0;
+    let bank = 0;
+    const accounts = moneyAccounts.map((acc) => {
+      const balance = accountBalance(acc, journalEntries);
+      if (/bank/i.test(acc.name)) bank += balance;
+      else cash += balance;
+      return { code: acc.code, name: acc.name, balance };
+    });
+
+    res.status(200).json({
+      balance: { cash, bank, total: cash + bank, accounts, derivedFromLedger: true },
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
 };
-exports.initializeBalance = async (req, res) => {
-    try {
-      const existingBalance = await Balance.findOne({ tenantId: req.user.tenantId });
-      if (existingBalance) {
-        return res.status(400).json({ message: 'Balance already exists for your tenant.' });
-      }
-  
-      const balance = new Balance({ bank: 0, cash: 0, tenantId: req.user.tenantId });
-      await balance.save();
-      res.status(201).json({ message: 'Balance initialized successfully', balance });
-    } catch (error) {
-      res.status(500).json({ message: error.message });
-    }
-  };

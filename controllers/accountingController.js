@@ -19,6 +19,7 @@ exports.getTrialBalance = async (req, res) => {
       };
     }
 
+    if (req.query.localChurch) query.localChurch = req.query.localChurch;
     const accounts = await Account.find({ isActive: true, tenantId });
     const journalEntries = await JournalEntry.find({
       ...query,
@@ -45,6 +46,7 @@ exports.getIncomeExpenditureStatement = async (req, res) => {
         $lte: new Date(endDate)
       };
     }
+    if (req.query.localChurch) query.localChurch = req.query.localChurch;
     const revenueAccounts = await Account.find({ type: 'revenue', isActive: true, tenantId });
     const expenseAccounts = await Account.find({ type: 'expense', isActive: true, tenantId });
     const journalEntries = await JournalEntry.find({
@@ -98,10 +100,13 @@ exports.getIncomeExpenditureStatement = async (req, res) => {
 exports.getBalanceSheet = async (req, res) => {
   try {
     const { tenantId } = req.user;
-    const assets = await Account.find({ type: 'asset', isActive: true, tenantId });
-    const liabilities = await Account.find({ type: 'liability', isActive: true, tenantId });
-    const equity = await Account.find({ type: 'equity', isActive: true, tenantId });
-    const journalEntries = await JournalEntry.find({ status: 'posted', tenantId }).populate('entries.account');
+    // Include ALL accounts (not just active) so the sheet reflects every balance and stays balanced.
+    const assets = await Account.find({ type: 'asset', tenantId });
+    const liabilities = await Account.find({ type: 'liability', tenantId });
+    const equity = await Account.find({ type: 'equity', tenantId });
+    const jeFilter = { status: 'posted', tenantId };
+    if (req.query.localChurch) jeFilter.localChurch = req.query.localChurch;
+    const journalEntries = await JournalEntry.find(jeFilter).populate('entries.account');
 
     const calculateBalance = (accounts) =>
       accounts.map(account => ({
@@ -113,17 +118,35 @@ exports.getBalanceSheet = async (req, res) => {
     const liabilitiesBalance = calculateBalance(liabilities);
     const equityBalance = calculateBalance(equity);
 
+    // Revenue and expense are temporary accounts; their net (surplus/deficit) belongs to
+    // the accumulated fund. Closing it into equity is what makes Assets = Liabilities + Equity.
+    let netSurplus = 0;
+    journalEntries.forEach(entry => {
+      entry.entries.forEach(line => {
+        const type = line.account && line.account.type;
+        if (type === 'revenue') netSurplus += (line.credit - line.debit);
+        else if (type === 'expense') netSurplus -= (line.debit - line.credit);
+      });
+    });
+    equityBalance.push({ accountName: 'Accumulated Surplus/(Deficit)', balance: netSurplus });
+
     const totalAssets = assetsBalance.reduce((sum, item) => sum + item.balance, 0);
     const totalLiabilities = liabilitiesBalance.reduce((sum, item) => sum + item.balance, 0);
     const totalEquity = equityBalance.reduce((sum, item) => sum + item.balance, 0);
+    const difference = Number((totalAssets - (totalLiabilities + totalEquity)).toFixed(2));
+
+    // Hide zero-balance account rows for readability (totals are unaffected); always keep the surplus line.
+    const nonZero = (rows) => rows.filter(r => Math.abs(r.balance) > 0.005);
 
     res.status(200).json({
-      assets: assetsBalance,
-      liabilities: liabilitiesBalance,
-      equity: equityBalance,
+      assets: nonZero(assetsBalance),
+      liabilities: nonZero(liabilitiesBalance),
+      equity: nonZero(equityBalance.slice(0, -1)).concat(equityBalance.slice(-1)),
       totalAssets,
       totalLiabilities,
-      totalEquity
+      totalEquity,
+      balanced: Math.abs(difference) < 0.01,
+      difference
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -206,6 +229,7 @@ exports.getGeneralLedger = async (req, res) => {
     if (accountId) {
       query['entries.account'] = accountId;
     }
+    if (req.query.localChurch) query.localChurch = req.query.localChurch;
 
     const journalEntries = await JournalEntry.find(query)
       .populate('entries.account')
@@ -247,6 +271,7 @@ exports.getAccountStatement = async (req, res) => {
       tenantId,
       'entries.account': accountId
     };
+    if (req.query.localChurch) query.localChurch = req.query.localChurch;
 
     if (startDate && endDate) {
       query.date = {
@@ -301,6 +326,7 @@ exports.getEquityStatement = async (req, res) => {
     const { startDate, endDate } = req.query;
     const { tenantId } = req.user;
     const query = { status: 'posted', tenantId };
+    if (req.query.localChurch) query.localChurch = req.query.localChurch;
     if (startDate && endDate) {
       query.date = {
         $gte: new Date(startDate),
@@ -311,11 +337,9 @@ exports.getEquityStatement = async (req, res) => {
     // Opening balance: sum of all entries before startDate
     let openingBalances = {};
     if (startDate) {
-      const openingEntries = await JournalEntry.find({
-        date: { $lt: new Date(startDate) },
-        status: 'posted',
-        tenantId
-      }).populate('entries.account');
+      const openingFilter = { date: { $lt: new Date(startDate) }, status: 'posted', tenantId };
+      if (req.query.localChurch) openingFilter.localChurch = req.query.localChurch;
+      const openingEntries = await JournalEntry.find(openingFilter).populate('entries.account');
       equityAccounts.forEach(account => {
         let balance = 0;
         openingEntries.forEach(entry => {

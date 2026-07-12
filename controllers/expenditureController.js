@@ -45,6 +45,7 @@ exports.addExpenditure = async (req, res) => {
         description: description || `Expenditure for ${voteheadDoc.name}`,
         entries, totalDebit, totalCredit,
         status: 'posted', createdBy: user, tenantId,
+        localChurch: localChurch || undefined,
       }], { session });
     });
 
@@ -111,6 +112,7 @@ exports.updateExpenditure = async (req, res) => {
             date: expenditure.date,
             description: expenditure.description || `Expenditure for ${voteheadDoc.name}`,
             entries, totalDebit, totalCredit, updatedAt: new Date(),
+            localChurch: expenditure.localChurch || undefined,
           },
           $setOnInsert: { status: 'posted', createdBy: req.user.name },
         },
