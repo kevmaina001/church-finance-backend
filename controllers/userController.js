@@ -2,7 +2,11 @@ const User = require('../models/User');
 const Tenant = require('../models/Tenant');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 const sendMail = require('../config/email');
+
+// Base URL of the frontend, used to build password-reset links
+const FRONTEND_BASE_URL = (process.env.FRONTEND_URL || 'https://ackamune-fund-manager.vercel.app').replace(/\/+$/, '');
 
 const register = async (req, res) => {
   const { name, email, password, tenantName } = req.body;
@@ -75,6 +79,93 @@ const login = async (req, res) => {
       res.status(500).json({ message: 'An error occurred during login. Please try again later.' });
     }
   };
+
+// @desc    Request a password reset link
+// @route   POST /api/users/forgot-password
+// @access  Public
+const forgotPassword = async (req, res) => {
+  const { email } = req.body;
+
+  // Always respond the same way to avoid leaking which emails are registered
+  const genericMessage = 'If an account exists for that email, a password reset link has been sent.';
+
+  try {
+    if (!email) {
+      return res.status(400).json({ message: 'Email is required' });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(200).json({ message: genericMessage });
+    }
+
+    // Create a raw token for the link and store only its hash
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const hashedToken = crypto.createHash('sha256').update(rawToken).digest('hex');
+
+    user.resetPasswordToken = hashedToken;
+    user.resetPasswordExpires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    await user.save();
+
+    const resetUrl = `${FRONTEND_BASE_URL}/reset-password/${rawToken}`;
+
+    try {
+      await sendMail({
+        to: user.email,
+        subject: 'Reset your Church Accounting System password',
+        text: `Hello ${user.name},\n\nWe received a request to reset your password.\n\nReset link (valid for 1 hour):\n${resetUrl}\n\nIf you did not request this, you can safely ignore this email.`,
+        html: `<p>Hello <b>${user.name}</b>,</p><p>We received a request to reset your password.</p><p><a href="${resetUrl}">Click here to reset your password</a> (valid for 1 hour).</p><p>If you did not request this, you can safely ignore this email.</p>`
+      });
+    } catch (mailErr) {
+      // Roll back the token so a failed email doesn't leave a dangling reset request
+      user.resetPasswordToken = undefined;
+      user.resetPasswordExpires = undefined;
+      await user.save();
+      console.error('Failed to send reset email:', mailErr.message);
+      return res.status(500).json({ message: 'Failed to send reset email. Please try again later.' });
+    }
+
+    return res.status(200).json({ message: genericMessage });
+  } catch (error) {
+    console.error('Error in forgotPassword:', error.message);
+    return res.status(500).json({ message: 'An error occurred. Please try again later.' });
+  }
+};
+
+// @desc    Reset password using a token from the email link
+// @route   POST /api/users/reset-password/:token
+// @access  Public
+const resetPassword = async (req, res) => {
+  const { token } = req.params;
+  const { password } = req.body;
+
+  try {
+    if (!password || password.length < 6) {
+      return res.status(400).json({ message: 'Password must be at least 6 characters long' });
+    }
+
+    const hashedToken = crypto.createHash('sha256').update(token).digest('hex');
+    const user = await User.findOne({
+      resetPasswordToken: hashedToken,
+      resetPasswordExpires: { $gt: new Date() },
+    });
+
+    if (!user) {
+      return res.status(400).json({ message: 'Password reset link is invalid or has expired.' });
+    }
+
+    user.password = password; // pre-save hook hashes it
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpires = undefined;
+    user.mustChangePassword = false;
+    await user.save();
+
+    return res.status(200).json({ message: 'Password has been reset successfully. You can now log in.' });
+  } catch (error) {
+    console.error('Error in resetPassword:', error.message);
+    return res.status(500).json({ message: 'An error occurred. Please try again later.' });
+  }
+};
 
 const getUserDetails = async (req, res) => {
     try {
@@ -212,6 +303,8 @@ const deleteUser = async (req, res) => {
 module.exports = {
     register,
     login,
+    forgotPassword,
+    resetPassword,
     getUserDetails,
     inviteUser,
     listUsers,
