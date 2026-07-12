@@ -1,59 +1,59 @@
+const mongoose = require('mongoose');
 const Expenditure = require('../models/Expenditure');
 const Votehead = require('../models/Votehead');
 const JournalEntry = require('../models/JournalEntry');
 
+// Build the balanced double-entry lines for an expenditure:
+//   debit the Expense account, credit the Cash/Bank (asset) account.
+function buildExpenditureEntries(expenseAccount, assetAccount, amount) {
+  return {
+    entries: [
+      { account: expenseAccount, debit: amount, credit: 0, description: 'Expense incurred' },
+      { account: assetAccount, debit: 0, credit: amount, description: 'Asset paid out' },
+    ],
+    totalDebit: amount,
+    totalCredit: amount,
+  };
+}
+
 exports.addExpenditure = async (req, res) => {
+  const session = await mongoose.startSession();
   try {
-    console.log('User Object in addExpenditure:', req.user); // Debugging log for req.user
-
-    if (!req.user) {
-      throw new Error('User not authenticated'); // Explicit error if req.user is undefined
-    }
-
+    if (!req.user) return res.status(401).json({ message: 'User not authenticated' });
     const { votehead, amount, description, year, assetAccount, date, localChurch } = req.body;
-    const user = req.user.name; // Retrieve user name from req.user
+    const tenantId = req.user.tenantId;
+    const user = req.user.name;
 
-    // Create a new Expenditure record, using the provided date or defaulting to now
-    const expenditure = new Expenditure({ votehead, amount, description, year, user, assetAccount, localChurch: localChurch || undefined, tenantId: req.user.tenantId, date: date || new Date() });
-    await expenditure.save();
-
-    // Fetch the votehead to get the linked expense account
-    const voteheadDoc = await Votehead.findOne({_id: votehead, tenantId: req.user.tenantId}).populate('account');
+    // Resolve the expense account this votehead posts to (read-only, before the transaction)
+    const voteheadDoc = await Votehead.findOne({ _id: votehead, tenantId }).populate('account');
     if (!voteheadDoc || !voteheadDoc.account) {
       return res.status(400).json({ message: 'Votehead is not linked to an expense account.' });
     }
 
-    // Create the journal entry
-    const journalEntry = new JournalEntry({
-      date: expenditure.date,
-      reference: `EXP-${expenditure._id}`,
-      description: description || `Expenditure for ${voteheadDoc.name}`,
-      entries: [
-        {
-          account: voteheadDoc.account,
-          debit: amount,
-          credit: 0,
-          description: 'Expense incurred'
-        },
-        {
-          account: assetAccount,
-          debit: 0,
-          credit: amount,
-          description: 'Asset paid out'
-        }
-      ],
-      totalDebit: amount,
-      totalCredit: amount,
-      status: 'posted',
-      createdBy: user,
-      tenantId: req.user.tenantId
-    });
-    await journalEntry.save();
+    let savedExpenditure;
+    await session.withTransaction(async () => {
+      const [expenditure] = await Expenditure.create([{
+        votehead, amount, description, year, user, assetAccount,
+        localChurch: localChurch || undefined, tenantId, date: date || new Date(),
+      }], { session });
+      savedExpenditure = expenditure;
 
-    res.status(201).json({ message: 'Expenditure added successfully', expenditure });
+      const { entries, totalDebit, totalCredit } = buildExpenditureEntries(voteheadDoc.account._id, assetAccount, amount);
+      await JournalEntry.create([{
+        date: expenditure.date,
+        reference: `EXP-${expenditure._id}`,
+        description: description || `Expenditure for ${voteheadDoc.name}`,
+        entries, totalDebit, totalCredit,
+        status: 'posted', createdBy: user, tenantId,
+      }], { session });
+    });
+
+    res.status(201).json({ message: 'Expenditure added successfully', expenditure: savedExpenditure });
   } catch (error) {
-    console.error('Error in addExpenditure:', error.message); // Debugging log
+    console.error('Error in addExpenditure:', error.message);
     res.status(500).json({ message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
@@ -74,33 +74,80 @@ exports.getExpenditures = async (req, res) => {
 };
 
 exports.updateExpenditure = async (req, res) => {
+  const session = await mongoose.startSession();
   try {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized. User not authenticated.' });
     const { id } = req.params;
+    const tenantId = req.user.tenantId;
 
-    if (!req.user) {
-      return res.status(401).json({ message: 'Unauthorized. User not authenticated.' });
+    const expenditure = await Expenditure.findOne({ _id: id, tenantId });
+    if (!expenditure) return res.status(404).json({ message: 'Expenditure not found' });
+
+    // Only these fields may be updated (prevents mass-assignment of tenantId etc.)
+    const { votehead, amount, description, year, assetAccount, localChurch, date } = req.body;
+    if (votehead !== undefined) expenditure.votehead = votehead;
+    if (amount !== undefined) expenditure.amount = amount;
+    if (description !== undefined) expenditure.description = description;
+    if (year !== undefined) expenditure.year = year;
+    if (assetAccount !== undefined) expenditure.assetAccount = assetAccount;
+    if (localChurch !== undefined) expenditure.localChurch = localChurch || undefined;
+    if (date !== undefined) expenditure.date = date;
+    expenditure.user = req.user.name;
+
+    const voteheadDoc = await Votehead.findOne({ _id: expenditure.votehead, tenantId }).populate('account');
+    if (!voteheadDoc || !voteheadDoc.account) {
+      return res.status(400).json({ message: 'Votehead is not linked to an expense account.' });
     }
 
-    const updatedExpenditure = await Expenditure.findOneAndUpdate(
-      { _id: id, tenantId: req.user.tenantId },
-      { ...req.body, user: req.user.name }, // Update the user field
-      { new: true }
-    );
+    let updated;
+    await session.withTransaction(async () => {
+      updated = await expenditure.save({ session });
+      // Keep the linked journal entry in sync (upsert covers legacy rows with no entry yet)
+      const { entries, totalDebit, totalCredit } = buildExpenditureEntries(voteheadDoc.account._id, expenditure.assetAccount, expenditure.amount);
+      await JournalEntry.findOneAndUpdate(
+        { reference: `EXP-${expenditure._id}`, tenantId },
+        {
+          $set: {
+            date: expenditure.date,
+            description: expenditure.description || `Expenditure for ${voteheadDoc.name}`,
+            entries, totalDebit, totalCredit, updatedAt: new Date(),
+          },
+          $setOnInsert: { status: 'posted', createdBy: req.user.name },
+        },
+        { session, upsert: true }
+      );
+    });
 
-    if (!updatedExpenditure) return res.status(404).json({ message: 'Expenditure not found' });
-    res.status(200).json({ message: 'Expenditure updated successfully', updatedExpenditure });
+    res.status(200).json({ message: 'Expenditure updated successfully', updatedExpenditure: updated });
   } catch (error) {
+    console.error('Error in updateExpenditure:', error.message);
     res.status(500).json({ message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
 exports.deleteExpenditure = async (req, res) => {
+  const session = await mongoose.startSession();
   try {
     const { id } = req.params;
-    const deletedExpenditure = await Expenditure.findOneAndDelete({ _id: id, tenantId: req.user.tenantId });
+    const tenantId = req.user.tenantId;
+
+    let deletedExpenditure;
+    await session.withTransaction(async () => {
+      deletedExpenditure = await Expenditure.findOneAndDelete({ _id: id, tenantId }, { session });
+      if (deletedExpenditure) {
+        // Remove the linked journal entry so the ledger stays consistent
+        await JournalEntry.deleteOne({ reference: `EXP-${id}`, tenantId }, { session });
+      }
+    });
+
     if (!deletedExpenditure) return res.status(404).json({ message: 'Expenditure not found' });
     res.status(200).json({ message: 'Expenditure deleted successfully', deletedExpenditure });
   } catch (error) {
+    console.error('Error in deleteExpenditure:', error.message);
     res.status(500).json({ message: error.message });
+  } finally {
+    session.endSession();
   }
 };

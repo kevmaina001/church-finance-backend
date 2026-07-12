@@ -57,10 +57,7 @@ const login = async (req, res) => {
       };
   
       const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1d' });
-  
-      // Log token payload for debugging
-      console.log('Generated Token Payload:', payload);
-  
+
       // Respond with token and user details
       res.status(200).json({
         message: 'Login successful',

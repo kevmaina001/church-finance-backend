@@ -3,6 +3,7 @@ const JournalEntry = require('../models/JournalEntry');
 const Income = require('../models/Income');
 const Expenditure = require('../models/Expenditure');
 const Balance = require('../models/Balance');
+const { computeTrialBalance, accountBalance } = require('../utils/ledger');
 
 // Get Trial Balance
 exports.getTrialBalance = async (req, res) => {
@@ -24,26 +25,7 @@ exports.getTrialBalance = async (req, res) => {
       status: 'posted'
     }).populate('entries.account');
 
-    const trialBalance = accounts.map(account => {
-      let debitTotal = 0;
-      let creditTotal = 0;
-
-      journalEntries.forEach(entry => {
-        entry.entries.forEach(line => {
-          if (line.account._id.toString() === account._id.toString()) {
-            debitTotal += line.debit;
-            creditTotal += line.credit;
-          }
-        });
-      });
-
-      return {
-        accountCode: account.code,
-        accountName: account.name,
-        debit: debitTotal,
-        credit: creditTotal
-      };
-    });
+    const trialBalance = computeTrialBalance(accounts, journalEntries);
 
     res.status(200).json({ trialBalance });
   } catch (error) {
@@ -121,26 +103,11 @@ exports.getBalanceSheet = async (req, res) => {
     const equity = await Account.find({ type: 'equity', isActive: true, tenantId });
     const journalEntries = await JournalEntry.find({ status: 'posted', tenantId }).populate('entries.account');
 
-    const calculateBalance = (accounts) => {
-      return accounts.map(account => {
-        let balance = 0;
-        journalEntries.forEach(entry => {
-          entry.entries.forEach(line => {
-            if (line.account._id.toString() === account._id.toString()) {
-              if (account.type === 'asset') {
-                balance += line.debit - line.credit;
-              } else {
-                balance += line.credit - line.debit;
-              }
-            }
-          });
-        });
-        return {
-          accountName: account.name,
-          balance
-        };
-      });
-    };
+    const calculateBalance = (accounts) =>
+      accounts.map(account => ({
+        accountName: account.name,
+        balance: accountBalance(account, journalEntries),
+      }));
 
     const assetsBalance = calculateBalance(assets);
     const liabilitiesBalance = calculateBalance(liabilities);
@@ -268,14 +235,16 @@ exports.getAccountStatement = async (req, res) => {
   try {
     const { accountId } = req.params;
     const { startDate, endDate } = req.query;
-    
-    const account = await Account.findById(accountId);
+    const { tenantId } = req.user;
+
+    const account = await Account.findOne({ _id: accountId, tenantId });
     if (!account) {
       return res.status(404).json({ message: 'Account not found' });
     }
 
     const query = {
       status: 'posted',
+      tenantId,
       'entries.account': accountId
     };
 
@@ -330,20 +299,22 @@ exports.getAccountStatement = async (req, res) => {
 exports.getEquityStatement = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
-    const query = { status: 'posted' };
+    const { tenantId } = req.user;
+    const query = { status: 'posted', tenantId };
     if (startDate && endDate) {
       query.date = {
         $gte: new Date(startDate),
         $lte: new Date(endDate)
       };
     }
-    const equityAccounts = await Account.find({ type: 'equity', isActive: true });
+    const equityAccounts = await Account.find({ type: 'equity', isActive: true, tenantId });
     // Opening balance: sum of all entries before startDate
     let openingBalances = {};
     if (startDate) {
       const openingEntries = await JournalEntry.find({
         date: { $lt: new Date(startDate) },
-        status: 'posted'
+        status: 'posted',
+        tenantId
       }).populate('entries.account');
       equityAccounts.forEach(account => {
         let balance = 0;

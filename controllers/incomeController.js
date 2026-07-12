@@ -1,52 +1,59 @@
+const mongoose = require('mongoose');
 const Income = require('../models/Income');
 const RevenueSource = require('../models/RevenueSource');
 const JournalEntry = require('../models/JournalEntry');
 
+// Build the balanced double-entry lines for an income:
+//   debit the Cash/Bank (asset) account, credit the Revenue account.
+function buildIncomeEntries(assetAccount, revenueAccount, amount) {
+  return {
+    entries: [
+      { account: assetAccount, debit: amount, credit: 0, description: 'Income received' },
+      { account: revenueAccount, debit: 0, credit: amount, description: 'Income recognized' },
+    ],
+    totalDebit: amount,
+    totalCredit: amount,
+  };
+}
+
 exports.addIncome = async (req, res) => {
+  const session = await mongoose.startSession();
   try {
-    if (!req.user) {
-      throw new Error('User not authenticated');
-    }
+    if (!req.user) return res.status(401).json({ message: 'User not authenticated' });
     const { revenueSource, amount, description, year, assetAccount, localChurch } = req.body;
+    const tenantId = req.user.tenantId;
     const user = req.user.name;
-    // Save the income record
-    const income = new Income({ revenueSource, amount, description, year, user, assetAccount, localChurch: localChurch || undefined, tenantId: req.user.tenantId });
-    await income.save();
-    // Fetch the revenue source to get the linked revenue account
-    const revenueSourceDoc = await RevenueSource.findOne({_id: revenueSource, tenantId: req.user.tenantId}).populate('account');
+
+    // Resolve the revenue account this source posts to (read-only, before the transaction)
+    const revenueSourceDoc = await RevenueSource.findOne({ _id: revenueSource, tenantId }).populate('account');
     if (!revenueSourceDoc || !revenueSourceDoc.account) {
       return res.status(400).json({ message: 'Revenue source is not linked to a revenue account.' });
     }
-    // Create the journal entry
-    const journalEntry = new JournalEntry({
-      date: income.date,
-      reference: `INC-${income._id}`,
-      description: description || `Income for ${revenueSourceDoc.name}`,
-      entries: [
-        {
-          account: assetAccount,
-          debit: amount,
-          credit: 0,
-          description: 'Income received'
-        },
-        {
-          account: revenueSourceDoc.account,
-          debit: 0,
-          credit: amount,
-          description: 'Income recognized'
-        }
-      ],
-      totalDebit: amount,
-      totalCredit: amount,
-      status: 'posted',
-      createdBy: user,
-      tenantId: req.user.tenantId
+
+    let savedIncome;
+    await session.withTransaction(async () => {
+      const [income] = await Income.create([{
+        revenueSource, amount, description, year, user, assetAccount,
+        localChurch: localChurch || undefined, tenantId,
+      }], { session });
+      savedIncome = income;
+
+      const { entries, totalDebit, totalCredit } = buildIncomeEntries(assetAccount, revenueSourceDoc.account._id, amount);
+      await JournalEntry.create([{
+        date: income.date,
+        reference: `INC-${income._id}`,
+        description: description || `Income for ${revenueSourceDoc.name}`,
+        entries, totalDebit, totalCredit,
+        status: 'posted', createdBy: user, tenantId,
+      }], { session });
     });
-    await journalEntry.save();
-    res.status(201).json({ message: 'Income added successfully', income });
+
+    res.status(201).json({ message: 'Income added successfully', income: savedIncome });
   } catch (error) {
     console.error('Error in addIncome:', error.message);
     res.status(500).json({ message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
@@ -67,34 +74,80 @@ exports.getIncomes = async (req, res) => {
 };
 
 exports.updateIncome = async (req, res) => {
+  const session = await mongoose.startSession();
   try {
+    if (!req.user) return res.status(401).json({ message: 'Unauthorized. User not authenticated.' });
     const { id } = req.params;
+    const tenantId = req.user.tenantId;
 
-    // Check if the user is defined
-    if (!req.user) {
-      return res.status(401).json({ message: 'Unauthorized. User not authenticated.' });
+    const income = await Income.findOne({ _id: id, tenantId });
+    if (!income) return res.status(404).json({ message: 'Income not found' });
+
+    // Only these fields may be updated (prevents mass-assignment of tenantId etc.)
+    const { revenueSource, amount, description, year, assetAccount, localChurch, date } = req.body;
+    if (revenueSource !== undefined) income.revenueSource = revenueSource;
+    if (amount !== undefined) income.amount = amount;
+    if (description !== undefined) income.description = description;
+    if (year !== undefined) income.year = year;
+    if (assetAccount !== undefined) income.assetAccount = assetAccount;
+    if (localChurch !== undefined) income.localChurch = localChurch || undefined;
+    if (date !== undefined) income.date = date;
+    income.user = req.user.name;
+
+    const revenueSourceDoc = await RevenueSource.findOne({ _id: income.revenueSource, tenantId }).populate('account');
+    if (!revenueSourceDoc || !revenueSourceDoc.account) {
+      return res.status(400).json({ message: 'Revenue source is not linked to a revenue account.' });
     }
 
-    const updatedIncome = await Income.findOneAndUpdate(
-      { _id: id, tenantId: req.user.tenantId },
-      { ...req.body, user: req.user.name }, // Update the user field
-      { new: true }
-    );
+    let updated;
+    await session.withTransaction(async () => {
+      updated = await income.save({ session });
+      // Keep the linked journal entry in sync (upsert covers legacy rows with no entry yet)
+      const { entries, totalDebit, totalCredit } = buildIncomeEntries(income.assetAccount, revenueSourceDoc.account._id, income.amount);
+      await JournalEntry.findOneAndUpdate(
+        { reference: `INC-${income._id}`, tenantId },
+        {
+          $set: {
+            date: income.date,
+            description: income.description || `Income for ${revenueSourceDoc.name}`,
+            entries, totalDebit, totalCredit, updatedAt: new Date(),
+          },
+          $setOnInsert: { status: 'posted', createdBy: req.user.name },
+        },
+        { session, upsert: true }
+      );
+    });
 
-    if (!updatedIncome) return res.status(404).json({ message: 'Income not found' });
-    res.status(200).json({ message: 'Income updated successfully', updatedIncome });
+    res.status(200).json({ message: 'Income updated successfully', updatedIncome: updated });
   } catch (error) {
+    console.error('Error in updateIncome:', error.message);
     res.status(500).json({ message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
 exports.deleteIncome = async (req, res) => {
+  const session = await mongoose.startSession();
   try {
     const { id } = req.params;
-    const deletedIncome = await Income.findOneAndDelete({ _id: id, tenantId: req.user.tenantId });
+    const tenantId = req.user.tenantId;
+
+    let deletedIncome;
+    await session.withTransaction(async () => {
+      deletedIncome = await Income.findOneAndDelete({ _id: id, tenantId }, { session });
+      if (deletedIncome) {
+        // Remove the linked journal entry so the ledger stays consistent
+        await JournalEntry.deleteOne({ reference: `INC-${id}`, tenantId }, { session });
+      }
+    });
+
     if (!deletedIncome) return res.status(404).json({ message: 'Income not found' });
     res.status(200).json({ message: 'Income deleted successfully', deletedIncome });
   } catch (error) {
+    console.error('Error in deleteIncome:', error.message);
     res.status(500).json({ message: error.message });
+  } finally {
+    session.endSession();
   }
 };

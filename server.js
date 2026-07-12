@@ -17,6 +17,9 @@ const tenantRoutes = require('./routes/tenantRoutes');
 const localChurchRoutes = require('./routes/localChurchRoutes');
 const app = express();
 
+// Behind Render's proxy: trust the first proxy so rate limiting keys on the real client IP.
+app.set('trust proxy', 1);
+
 
 
 

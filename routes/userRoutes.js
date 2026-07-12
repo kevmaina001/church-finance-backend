@@ -12,14 +12,15 @@ const {
 } = require('../controllers/userController');
 const authenticate = require('../middlewares/auth'); // Import authenticate middleware
 const roleMiddleware = require('../middlewares/role'); // Import roleMiddleware
+const { authLimiter } = require('../middlewares/rateLimit');
 
 const router = express.Router();
 
-// Public routes
+// Public routes (rate-limited to slow brute-force / email bombing)
 router.post('/register', register);
-router.post('/login', login);
-router.post('/forgot-password', forgotPassword);
-router.post('/reset-password/:token', resetPassword);
+router.post('/login', authLimiter, login);
+router.post('/forgot-password', authLimiter, forgotPassword);
+router.post('/reset-password/:token', authLimiter, resetPassword);
 
 // Authenticated route for any user
 router.get('/me', authenticate, getUserDetails);
