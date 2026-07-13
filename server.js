@@ -79,6 +79,41 @@ app.use('/api/funds', fundRoutes);
 
 
 
+// Keep the free-tier instance from sleeping.
+// Render spins a free service down after ~15 min with no inbound traffic, and the
+// cold start that follows takes ~30s. To avoid that, we ping our own /health every
+// 14 min so the idle timer never elapses. Render provides RENDER_EXTERNAL_URL
+// automatically; SELF_URL is a manual fallback. Disabled locally (neither var set),
+// so it never runs during development.
+const https = require('https');
+const http = require('http');
+
+function startKeepAlive() {
+  const base = (process.env.RENDER_EXTERNAL_URL || process.env.SELF_URL || '').replace(/\/$/, '');
+  if (!base) {
+    console.log('Keep-alive disabled (no RENDER_EXTERNAL_URL / SELF_URL set)');
+    return;
+  }
+  const target = `${base}/health`;
+  const client = target.startsWith('https') ? https : http;
+  const INTERVAL_MS = 14 * 60 * 1000; // 14 min, under Render's 15-min idle window
+
+  setInterval(() => {
+    const started = Date.now();
+    client
+      .get(target, (res) => {
+        res.resume(); // drain the response so the socket is freed
+        console.log(`[keep-alive] ${res.statusCode} from ${target} in ${Date.now() - started}ms`);
+      })
+      .on('error', (err) => console.error('[keep-alive] ping failed:', err.message));
+  }, INTERVAL_MS);
+
+  console.log(`Keep-alive enabled: pinging ${target} every 14 min`);
+}
+
 // Server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  startKeepAlive();
+});
