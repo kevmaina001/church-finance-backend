@@ -1,6 +1,5 @@
 const express = require('express');
 const {
-    register,
     login,
     forgotPassword,
     resetPassword,
@@ -16,8 +15,9 @@ const { authLimiter } = require('../middlewares/rateLimit');
 
 const router = express.Router();
 
+// Public self-registration is disabled — new tenants/users are provisioned by an admin.
+// (The register controller remains in place should it ever be re-enabled behind an invite key.)
 // Public routes (rate-limited to slow brute-force / email bombing)
-router.post('/register', register);
 router.post('/login', authLimiter, login);
 router.post('/forgot-password', authLimiter, forgotPassword);
 router.post('/reset-password/:token', authLimiter, resetPassword);
