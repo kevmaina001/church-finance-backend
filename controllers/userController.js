@@ -4,6 +4,7 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const sendMail = require('../config/email');
+const seedTenant = require('../utils/seedTenant');
 
 // Base URL of the frontend, used to build password-reset links
 const FRONTEND_BASE_URL = (process.env.FRONTEND_URL || 'https://ackamune-fund-manager.vercel.app').replace(/\/+$/, '');
@@ -17,16 +18,37 @@ const register = async (req, res) => {
 
     // Create a new user as an Admin for the new tenant
     // The password will be hashed by the pre-save hook in the User model
-    const user = new User({ 
-      name, 
-      email, 
+    const user = new User({
+      name,
+      email: email ? email.trim().toLowerCase() : undefined,
       password, // Pass the plain password
       role: 'Admin', // Assign Admin role on registration
-      tenantId: tenant._id 
+      mustChangePassword: false,
+      tenantId: tenant._id,
     });
     await user.save();
 
-    res.status(201).json({ message: 'Tenant and Admin user registered successfully', user, tenant });
+    // Seed the new tenant with a starter setup + demonstration data so it isn't empty.
+    // Non-fatal: if seeding fails, registration still succeeds.
+    try {
+      await seedTenant(tenant._id);
+    } catch (seedErr) {
+      console.error('Demo seeding failed for tenant', String(tenant._id), '-', seedErr.message);
+    }
+
+    // Log the new admin straight in so the app can send them to choose a context.
+    const token = jwt.sign(
+      { id: user._id, name: user.name, role: user.role, tenantId: user.tenantId, localChurch: null },
+      process.env.JWT_SECRET,
+      { expiresIn: '1d' }
+    );
+
+    res.status(201).json({
+      message: 'Tenant and Admin user registered successfully',
+      token,
+      user: { id: user._id, name: user.name, email: user.email, role: user.role, tenantId: user.tenantId, localChurch: null },
+      tenant,
+    });
   } catch (error) {
     res.status(400).json({ message: error.message });
   }

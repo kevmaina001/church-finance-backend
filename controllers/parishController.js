@@ -65,6 +65,13 @@ exports.getParishOverview = async (req, res) => {
     let incomeBudget = 0, expenseBudget = 0;
     budgets.forEach((b) => { if (b.kind === 'income') incomeBudget += b.amount; else expenseBudget += b.amount; });
 
+    // Parish-quota annual target = the parish-level expense budget on the Parish Quota votehead.
+    let quotaTarget = 0;
+    if (quotaVh) {
+      const qb = budgets.find((b) => b.kind === 'expense' && String(b.votehead) === String(quotaVh._id));
+      if (qb) quotaTarget = qb.amount;
+    }
+
     // 12-month trend (parish-wide), months 1-12 → Jan..Dec
     const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const monthMap = (agg) => { const mm = {}; agg.forEach((a) => { mm[a._id] = a.total; }); return mm; };
@@ -84,6 +91,7 @@ exports.getParishOverview = async (req, res) => {
       budget: { incomeBudget, incomeActual, expenseBudget, expenseActual },
       monthly,
       quotaTracked: Boolean(quotaVh),
+      quotaTarget,
     });
   } catch (error) {
     res.status(500).json({ message: error.message });
