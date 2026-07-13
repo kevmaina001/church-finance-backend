@@ -1,0 +1,76 @@
+const mongoose = require('mongoose');
+const Income = require('../models/Income');
+const Expenditure = require('../models/Expenditure');
+const LocalChurch = require('../models/LocalChurch');
+const Budget = require('../models/Budget');
+const Votehead = require('../models/Votehead');
+
+// Parish overview: per-child-church stats plus consolidated roll-ups, in a single call.
+// Powers the parish (consolidated) dashboard.
+exports.getParishOverview = async (req, res) => {
+  try {
+    const tenantId = new mongoose.Types.ObjectId(req.user.tenantId);
+    const tenantStr = req.user.tenantId;
+    const year = Number(req.query.year) || new Date().getFullYear();
+
+    const groupByChurch = (extraMatch = {}) => [
+      { $match: { tenantId, ...extraMatch } },
+      { $group: { _id: '$localChurch', total: { $sum: '$amount' } } },
+    ];
+
+    const quotaVh = await Votehead.findOne({ tenantId: tenantStr, name: 'Parish Quota' }).select('_id');
+
+    const [churches, incYear, expYear, incAll, expAll, quotaAgg, budgets] = await Promise.all([
+      LocalChurch.find({ tenantId: tenantStr, isActive: true }).select('name').sort({ name: 1 }),
+      Income.aggregate(groupByChurch({ year })),
+      Expenditure.aggregate(groupByChurch({ year })),
+      Income.aggregate(groupByChurch()),        // all-time (for running cash)
+      Expenditure.aggregate(groupByChurch()),   // all-time
+      quotaVh
+        ? Expenditure.aggregate(groupByChurch({ year, votehead: quotaVh._id }))
+        : Promise.resolve([]),
+      Budget.find({ tenantId: tenantStr, year, localChurch: null }), // parish-level budgets
+    ]);
+
+    const toMap = (agg) => {
+      const m = {};
+      agg.forEach((a) => { m[a._id ? String(a._id) : 'general'] = a.total; });
+      return m;
+    };
+    const incY = toMap(incYear), expY = toMap(expYear), incA = toMap(incAll), expA = toMap(expAll), quotaM = toMap(quotaAgg);
+
+    const churchRows = churches.map((c) => {
+      const id = String(c._id);
+      const income = incY[id] || 0;
+      const expenditure = expY[id] || 0;
+      const cash = (incA[id] || 0) - (expA[id] || 0); // running balance (all-time in − out)
+      return { id, name: c.name, income, expenditure, net: income - expenditure, cash, quota: quotaM[id] || 0 };
+    });
+
+    // Money not tagged to any church (parish-general)
+    const generalIncome = incY.general || 0;
+    const generalExpenditure = expY.general || 0;
+    const generalCash = (incA.general || 0) - (expA.general || 0);
+
+    const incomeActual = Object.values(incY).reduce((s, v) => s + v, 0);
+    const expenseActual = Object.values(expY).reduce((s, v) => s + v, 0);
+    let incomeBudget = 0, expenseBudget = 0;
+    budgets.forEach((b) => { if (b.kind === 'income') incomeBudget += b.amount; else expenseBudget += b.amount; });
+
+    res.status(200).json({
+      year,
+      churches: churchRows,
+      parishGeneral: { income: generalIncome, expenditure: generalExpenditure, net: generalIncome - generalExpenditure, cash: generalCash },
+      totals: {
+        income: incomeActual,
+        expenditure: expenseActual,
+        net: incomeActual - expenseActual,
+        cash: churchRows.reduce((s, c) => s + c.cash, 0) + generalCash,
+      },
+      budget: { incomeBudget, incomeActual, expenseBudget, expenseActual },
+      quotaTracked: Boolean(quotaVh),
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
