@@ -5,6 +5,73 @@ const LocalChurch = require('../models/LocalChurch');
 const Budget = require('../models/Budget');
 const Votehead = require('../models/Votehead');
 
+// Daily activity ("day book"): all income + expenditure for a given calendar date,
+// scoped to one church or across the whole parish. Powers the Daily Activity tab.
+exports.getDailyActivity = async (req, res) => {
+  try {
+    const tenantId = req.user.tenantId;
+    const { date, localChurch } = req.query;
+    if (!date) return res.status(400).json({ message: 'date is required (YYYY-MM-DD)' });
+
+    const start = new Date(`${date}T00:00:00.000Z`);
+    const end = new Date(`${date}T23:59:59.999Z`);
+    const range = { $gte: start, $lte: end };
+    const incFilter = { tenantId, date: range };
+    const expFilter = { tenantId, date: range };
+    if (localChurch) { incFilter.localChurch = localChurch; expFilter.localChurch = localChurch; }
+
+    const [incomes, expenditures] = await Promise.all([
+      Income.find(incFilter)
+        .populate('revenueSource', 'name')
+        .populate({ path: 'localChurch', select: 'name', options: { strictPopulate: false } })
+        .sort({ date: 1, createdAt: 1 }),
+      Expenditure.find(expFilter)
+        .populate('votehead', 'name')
+        .populate({ path: 'localChurch', select: 'name', options: { strictPopulate: false } })
+        .sort({ date: 1, createdAt: 1 }),
+    ]);
+
+    const mapRow = (r, categoryField) => ({
+      id: String(r._id),
+      churchId: r.localChurch ? String(r.localChurch._id) : null,
+      church: r.localChurch ? r.localChurch.name : 'Parish general',
+      category: r[categoryField] ? r[categoryField].name : 'N/A',
+      amount: r.amount,
+      description: r.description || '',
+      user: r.user || '',
+      time: r.createdAt,
+    });
+    const income = incomes.map((r) => mapRow(r, 'revenueSource'));
+    const expenditure = expenditures.map((r) => mapRow(r, 'votehead'));
+
+    // Per-church subtotals for the day
+    const bucket = {};
+    const add = (key, name, field, amt) => {
+      if (!bucket[key]) bucket[key] = { churchId: key === 'general' ? null : key, church: name, income: 0, expenditure: 0 };
+      bucket[key][field] += amt;
+    };
+    income.forEach((r) => add(r.churchId || 'general', r.church, 'income', r.amount));
+    expenditure.forEach((r) => add(r.churchId || 'general', r.church, 'expenditure', r.amount));
+    const byChurch = Object.values(bucket)
+      .map((b) => ({ ...b, net: b.income - b.expenditure }))
+      .sort((a, b) => a.church.localeCompare(b.church));
+
+    const totalIncome = income.reduce((s, r) => s + r.amount, 0);
+    const totalExpenditure = expenditure.reduce((s, r) => s + r.amount, 0);
+
+    res.status(200).json({
+      date,
+      scope: localChurch ? 'church' : 'parish',
+      income,
+      expenditure,
+      byChurch,
+      totals: { income: totalIncome, expenditure: totalExpenditure, net: totalIncome - totalExpenditure },
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 // Parish overview: per-child-church stats plus consolidated roll-ups, in a single call.
 // Powers the parish (consolidated) dashboard.
 exports.getParishOverview = async (req, res) => {
