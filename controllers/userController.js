@@ -306,7 +306,7 @@ const listUsers = async (req, res) => {
 // @route   PUT /api/users/:id
 // @access  Admin
 const updateUser = async (req, res) => {
-    const { role, localChurch } = req.body;
+    const { role, localChurch, email, phone, password } = req.body;
     const { id } = req.params;
 
     try {
@@ -320,6 +320,38 @@ const updateUser = async (req, res) => {
         // Prevent a user from changing their own role (avoid self-lockout / privilege games)
         if (userToUpdate._id.toString() === req.user.id && role && role !== userToUpdate.role) {
             return res.status(400).json({ message: 'You cannot change your own role.' });
+        }
+
+        // Login identifiers the admin can manage: email + phone (each unique across users)
+        if (email !== undefined) {
+            const e = email && email.trim() ? email.trim().toLowerCase() : undefined;
+            if (e && e !== userToUpdate.email) {
+                if (await User.findOne({ email: e, _id: { $ne: userToUpdate._id } })) {
+                    return res.status(400).json({ message: 'Another user already has that email' });
+                }
+            }
+            userToUpdate.email = e;
+        }
+        if (phone !== undefined) {
+            const p = phone && phone.trim() ? phone.trim() : undefined;
+            if (p && p !== userToUpdate.phone) {
+                if (await User.findOne({ phone: p, _id: { $ne: userToUpdate._id } })) {
+                    return res.status(400).json({ message: 'Another user already has that phone number' });
+                }
+            }
+            userToUpdate.phone = p;
+        }
+        // Admin sets a password directly (hashed by the pre-save hook).
+        if (password !== undefined && password.trim()) {
+            if (password.trim().length < 4) {
+                return res.status(400).json({ message: 'Password must be at least 4 characters' });
+            }
+            userToUpdate.password = password.trim();
+            userToUpdate.mustChangePassword = false;
+        }
+        // A user must keep at least one login identifier.
+        if (!userToUpdate.email && !userToUpdate.phone) {
+            return res.status(400).json({ message: 'A user must have an email or a phone number.' });
         }
 
         if (role !== undefined) {
