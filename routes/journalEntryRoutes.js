@@ -1,14 +1,14 @@
 const express = require('express');
 const { listJournalEntries, getJournalEntry, addJournalEntry } = require('../controllers/journalEntryController');
 const authenticate = require('../middlewares/auth');
-const roleMiddleware = require('../middlewares/role');
+const { requireParishLevel } = require('../middlewares/permit');
 
 const router = express.Router();
 
-router.use(authenticate, roleMiddleware('Special User'));
-
-router.get('/', listJournalEntries);
-router.get('/:id', getJournalEntry);
-router.post('/', addJournalEntry);
+// Viewing the ledger is open to any authenticated user; posting manual journal
+// entries is a parish-level accounting action.
+router.get('/', authenticate, listJournalEntries);
+router.get('/:id', authenticate, getJournalEntry);
+router.post('/', authenticate, requireParishLevel, addJournalEntry);
 
 module.exports = router; 

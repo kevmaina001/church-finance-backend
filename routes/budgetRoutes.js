@@ -7,14 +7,14 @@ const {
   getBudgetReport,
 } = require('../controllers/budgetController');
 const authenticate = require('../middlewares/auth');
-const roleMiddleware = require('../middlewares/role');
+const { requireParishLevel } = require('../middlewares/permit');
 
 // Reading budgets and the report is available to any authenticated user in the parish
 router.get('/', authenticate, getBudgets);
 router.get('/report', authenticate, getBudgetReport);
 
-// Setting/removing budgets is Admin-only
-router.post('/', authenticate, roleMiddleware('Admin'), setBudget);
-router.delete('/:id', authenticate, roleMiddleware('Admin'), deleteBudget);
+// Setting/removing budgets is a parish-wide action
+router.post('/', authenticate, requireParishLevel, setBudget);
+router.delete('/:id', authenticate, requireParishLevel, deleteBudget);
 
 module.exports = router;

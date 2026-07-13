@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Income = require('../models/Income');
 const RevenueSource = require('../models/RevenueSource');
 const JournalEntry = require('../models/JournalEntry');
+const { lockedChurch, canWriteChurch } = require('../utils/permissions');
 
 // Build the balanced double-entry lines for an income:
 //   debit the Cash/Bank (asset) account, credit the Revenue account.
@@ -24,6 +25,10 @@ exports.addIncome = async (req, res) => {
     const tenantId = req.user.tenantId;
     const user = req.user.name;
 
+    // Church-scoped users (e.g. a church treasurer) can only file records for their own
+    // church; parish-level users use whatever church was chosen (or parish-general).
+    const effectiveChurch = lockedChurch(req.user) || localChurch || undefined;
+
     // Resolve the revenue account this source posts to (read-only, before the transaction)
     const revenueSourceDoc = await RevenueSource.findOne({ _id: revenueSource, tenantId }).populate('account');
     if (!revenueSourceDoc || !revenueSourceDoc.account) {
@@ -34,7 +39,7 @@ exports.addIncome = async (req, res) => {
     await session.withTransaction(async () => {
       const [income] = await Income.create([{
         revenueSource, amount, description, year, user, assetAccount,
-        localChurch: localChurch || undefined, member: member || undefined, fund: fund || undefined, tenantId,
+        localChurch: effectiveChurch, member: member || undefined, fund: fund || undefined, tenantId,
       }], { session });
       savedIncome = income;
 
@@ -45,7 +50,7 @@ exports.addIncome = async (req, res) => {
         description: description || `Income for ${revenueSourceDoc.name}`,
         entries, totalDebit, totalCredit,
         status: 'posted', createdBy: user, tenantId,
-        localChurch: localChurch || undefined,
+        localChurch: effectiveChurch,
       }], { session });
     });
 
@@ -89,6 +94,11 @@ exports.updateIncome = async (req, res) => {
     const income = await Income.findOne({ _id: id, tenantId });
     if (!income) return res.status(404).json({ message: 'Income not found' });
 
+    // A church-scoped user may only edit records belonging to their own church.
+    if (!canWriteChurch(req.user, income.localChurch)) {
+      return res.status(403).json({ message: 'You can only edit records for your own church.' });
+    }
+
     // Only these fields may be updated (prevents mass-assignment of tenantId etc.)
     const { revenueSource, amount, description, year, assetAccount, localChurch, member, fund, date } = req.body;
     if (revenueSource !== undefined) income.revenueSource = revenueSource;
@@ -101,6 +111,10 @@ exports.updateIncome = async (req, res) => {
     if (fund !== undefined) income.fund = fund || undefined;
     if (date !== undefined) income.date = date;
     income.user = req.user.name;
+
+    // Scoped users can never move a record out of their own church.
+    const locked = lockedChurch(req.user);
+    if (locked) income.localChurch = locked;
 
     const revenueSourceDoc = await RevenueSource.findOne({ _id: income.revenueSource, tenantId }).populate('account');
     if (!revenueSourceDoc || !revenueSourceDoc.account) {
@@ -141,6 +155,13 @@ exports.deleteIncome = async (req, res) => {
   try {
     const { id } = req.params;
     const tenantId = req.user.tenantId;
+
+    // Load first so we can enforce church scope before deleting.
+    const existing = await Income.findOne({ _id: id, tenantId });
+    if (!existing) return res.status(404).json({ message: 'Income not found' });
+    if (!canWriteChurch(req.user, existing.localChurch)) {
+      return res.status(403).json({ message: 'You can only delete records for your own church.' });
+    }
 
     let deletedIncome;
     await session.withTransaction(async () => {

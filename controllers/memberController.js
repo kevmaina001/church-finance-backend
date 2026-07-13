@@ -1,5 +1,6 @@
 const Member = require('../models/Member');
 const Income = require('../models/Income');
+const { lockedChurch, canWriteChurch } = require('../utils/permissions');
 
 // List members for the parish (optionally filtered by local church)
 exports.getMembers = async (req, res) => {
@@ -22,11 +23,13 @@ exports.addMember = async (req, res) => {
     if (!name || !name.trim()) {
       return res.status(400).json({ message: 'Member name is required' });
     }
+    // Church-scoped users can only register members under their own church.
+    const effectiveChurch = lockedChurch(req.user) || localChurch || undefined;
     const member = new Member({
       name: name.trim(),
       memberNumber: memberNumber && memberNumber.trim() ? memberNumber.trim() : undefined,
       phone, email,
-      localChurch: localChurch || undefined,
+      localChurch: effectiveChurch,
       tenantId: req.user.tenantId,
     });
     await member.save();
@@ -44,12 +47,19 @@ exports.updateMember = async (req, res) => {
     const member = await Member.findOne({ _id: id, tenantId: req.user.tenantId });
     if (!member) return res.status(404).json({ message: 'Member not found' });
 
+    // A church-scoped user may only edit members in their own church.
+    if (!canWriteChurch(req.user, member.localChurch)) {
+      return res.status(403).json({ message: 'You can only edit members in your own church.' });
+    }
+
     const { name, memberNumber, phone, email, localChurch } = req.body;
     if (name !== undefined) member.name = name.trim();
     if (memberNumber !== undefined) member.memberNumber = memberNumber && memberNumber.trim() ? memberNumber.trim() : undefined;
     if (phone !== undefined) member.phone = phone;
     if (email !== undefined) member.email = email;
     if (localChurch !== undefined) member.localChurch = localChurch || undefined;
+    const locked = lockedChurch(req.user);
+    if (locked) member.localChurch = locked;
     await member.save();
     res.status(200).json({ message: 'Member updated', member });
   } catch (error) {
@@ -64,6 +74,9 @@ exports.toggleMemberActive = async (req, res) => {
     const { id } = req.params;
     const member = await Member.findOne({ _id: id, tenantId: req.user.tenantId });
     if (!member) return res.status(404).json({ message: 'Member not found' });
+    if (!canWriteChurch(req.user, member.localChurch)) {
+      return res.status(403).json({ message: 'You can only change members in your own church.' });
+    }
     member.isActive = !member.isActive;
     await member.save();
     res.status(200).json({ message: `Member ${member.isActive ? 'activated' : 'deactivated'}`, member });

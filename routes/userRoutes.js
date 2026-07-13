@@ -11,7 +11,7 @@ const {
     getUserDetails
 } = require('../controllers/userController');
 const authenticate = require('../middlewares/auth'); // Import authenticate middleware
-const roleMiddleware = require('../middlewares/role'); // Import roleMiddleware
+const { requireUserManagement } = require('../middlewares/permit');
 const { authLimiter } = require('../middlewares/rateLimit');
 
 const router = express.Router();
@@ -25,10 +25,10 @@ router.post('/reset-password/:token', authLimiter, resetPassword);
 // Authenticated route for any user
 router.get('/me', authenticate, getUserDetails);
 
-// Admin-only routes for user management
-router.post('/invite', authenticate, roleMiddleware('Admin'), inviteUser);
-router.get('/', authenticate, roleMiddleware('Admin'), listUsers);
-router.put('/:id', authenticate, roleMiddleware('Admin'), updateUser);
-router.delete('/:id', authenticate, roleMiddleware('Admin'), deleteUser);
+// User management: admin, vicar, and the parish treasurer
+router.post('/invite', authenticate, requireUserManagement, inviteUser);
+router.get('/', authenticate, requireUserManagement, listUsers);
+router.put('/:id', authenticate, requireUserManagement, updateUser);
+router.delete('/:id', authenticate, requireUserManagement, deleteUser);
 
 module.exports = router;

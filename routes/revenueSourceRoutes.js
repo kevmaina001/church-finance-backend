@@ -1,13 +1,13 @@
 const express = require('express');
 const { addRevenueSource, getRevenueSources, updateRevenueSource, deleteRevenueSource } = require('../controllers/revenueSourceController');
 const authenticate = require('../middlewares/auth');
-const roleMiddleware = require('../middlewares/role');
+const { requireParishLevel } = require('../middlewares/permit');
 
 const router = express.Router();
 
-router.post('/', authenticate, roleMiddleware('Special User'), addRevenueSource);
+router.post('/', authenticate, requireParishLevel, addRevenueSource);
 router.get('/', authenticate, getRevenueSources);
-router.put('/:id', authenticate, roleMiddleware('Special User'), updateRevenueSource);
-router.delete('/:id', authenticate, roleMiddleware('Special User'), deleteRevenueSource);
+router.put('/:id', authenticate, requireParishLevel, updateRevenueSource);
+router.delete('/:id', authenticate, requireParishLevel, deleteRevenueSource);
 
 module.exports = router; 

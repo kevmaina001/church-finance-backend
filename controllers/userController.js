@@ -33,29 +33,38 @@ const register = async (req, res) => {
 };
 
 const login = async (req, res) => {
-    const { email, password } = req.body;
-  
+    // Accept a single `identifier` (email or phone), or the legacy `email` field.
+    const { identifier, email, phone, password } = req.body;
+    const loginId = (identifier || email || phone || '').trim();
+
     try {
-      // Check if the user exists
-      const user = await User.findOne({ email });
+      if (!loginId || !password) {
+        return res.status(400).json({ message: 'Enter your email or phone and password.' });
+      }
+
+      // Match by email or phone (case-insensitive email)
+      const user = await User.findOne({
+        $or: [{ email: loginId.toLowerCase() }, { email: loginId }, { phone: loginId }],
+      });
       if (!user) {
         return res.status(404).json({ message: 'User not found' });
       }
-  
+
       // Validate password
       const isMatch = await bcrypt.compare(password, user.password);
       if (!isMatch) {
         return res.status(400).json({ message: 'Invalid credentials' });
       }
-  
-      // Generate JWT token
+
+      // Generate JWT token (localChurch drives per-church write scoping)
       const payload = {
         id: user._id,
         name: user.name,
         role: user.role,
         tenantId: user.tenantId,
+        localChurch: user.localChurch || null,
       };
-  
+
       const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1d' });
 
       // Respond with token and user details
@@ -66,7 +75,9 @@ const login = async (req, res) => {
           id: user._id,
           name: user.name,
           email: user.email,
+          phone: user.phone,
           role: user.role,
+          localChurch: user.localChurch || null,
           tenantId: user.tenantId,
           mustChangePassword: user.mustChangePassword,
         },
@@ -181,44 +192,78 @@ const getUserDetails = async (req, res) => {
 // @desc    Invite a new user to the tenant
 // @route   POST /api/users/invite
 // @access  Admin
-const inviteUser = async (req, res) => {
-    const { name, email, password, role } = req.body;
-    const { tenantId } = req.user; // Get tenant from the inviting admin
+const VALID_ROLES = ['Admin', 'Vicar', 'Treasurer', 'Secretary', 'Member'];
 
-    // Basic validation
-    if (!name || !email || !password || !role) {
-        return res.status(400).json({ message: 'Please provide name, email, password, and role' });
+const inviteUser = async (req, res) => {
+    let { name, email, phone, password, role, localChurch } = req.body;
+    const { tenantId } = req.user;
+
+    email = email && email.trim() ? email.trim().toLowerCase() : undefined;
+    phone = phone && phone.trim() ? phone.trim() : undefined;
+
+    // Need a name, a role, and at least one login identifier (email or phone)
+    if (!name || !role) {
+        return res.status(400).json({ message: 'Please provide a name and a role.' });
     }
+    if (!email && !phone) {
+        return res.status(400).json({ message: 'Provide an email or a phone number for login.' });
+    }
+    if (!VALID_ROLES.includes(role)) {
+        return res.status(400).json({ message: `Role must be one of: ${VALID_ROLES.join(', ')}` });
+    }
+    // Scoped roles may be tied to a local church; parish-level roles never are.
+    const scopedChurch = ['Treasurer', 'Secretary'].includes(role) && localChurch ? localChurch : undefined;
 
     try {
-        const userExists = await User.findOne({ email });
-        if (userExists) {
-            return res.status(400).json({ message: 'User with this email already exists' });
+        if (email && await User.findOne({ email })) {
+            return res.status(400).json({ message: 'A user with this email already exists' });
         }
+        if (phone && await User.findOne({ phone })) {
+            return res.status(400).json({ message: 'A user with this phone number already exists' });
+        }
+
+        // Auto-generate a temporary password if none supplied
+        const tempPassword = password && password.trim() ? password.trim() : crypto.randomBytes(4).toString('hex');
 
         const user = new User({
             name,
             email,
-            password, // The pre-save hook will hash this
+            phone,
+            password: tempPassword, // hashed by the pre-save hook
             role,
+            localChurch: scopedChurch,
             tenantId,
             mustChangePassword: true,
         });
-
         await user.save();
 
-        // Send invitation email
-        await sendMail({
-          to: email,
-          subject: 'You have been invited to Church Accounting System',
-          text: `Hello ${name},\n\nYou have been invited to join the Church Accounting System.\n\nLogin email: ${email}\nTemporary password: ${password}\n\nPlease log in and change your password immediately.\n\nLogin URL: ${process.env.FRONTEND_URL || 'https://ackamune-fund-manager.vercel.app/login'}\n\nThank you!`,
-          html: `<p>Hello <b>${name}</b>,</p><p>You have been invited to join the <b>Church Accounting System</b>.</p><ul><li><b>Login email:</b> ${email}</li><li><b>Temporary password:</b> ${password}</li></ul><p>Please log in and <b>change your password immediately</b>.</p><p>Login URL: <a href=\"${process.env.FRONTEND_URL || 'https://ackamune-fund-manager.vercel.app/login'}\">Login</a></p><p>Thank you!</p>`
-        });
+        // Email the invite only when we have an address to send to
+        let emailed = false;
+        if (email) {
+            try {
+                await sendMail({
+                    to: email,
+                    subject: 'You have been invited to Church Accounting System',
+                    text: `Hello ${name},\n\nYou have been invited to join the Church Accounting System as ${role}.\n\nLogin: ${email}${phone ? ' or ' + phone : ''}\nTemporary password: ${tempPassword}\n\nPlease log in and change your password immediately.\n\nLogin URL: ${FRONTEND_BASE_URL}/login\n\nThank you!`,
+                    html: `<p>Hello <b>${name}</b>,</p><p>You have been invited to join the <b>Church Accounting System</b> as <b>${role}</b>.</p><ul><li><b>Login:</b> ${email}${phone ? ' or ' + phone : ''}</li><li><b>Temporary password:</b> ${tempPassword}</li></ul><p>Please log in and <b>change your password immediately</b>.</p><p><a href="${FRONTEND_BASE_URL}/login">Login</a></p>`
+                });
+                emailed = true;
+            } catch (mailErr) {
+                console.error('Invite email failed:', mailErr.message);
+            }
+        }
 
-        res.status(201).json({ message: 'User invited successfully', user });
+        const safeUser = user.toObject();
+        delete safeUser.password;
+        // Return the temp password so the admin can pass it on when no email was sent.
+        res.status(201).json({
+            message: emailed ? 'User created and invite emailed.' : 'User created.',
+            user: safeUser,
+            tempPassword: emailed ? undefined : tempPassword,
+        });
     } catch (err) {
         console.error(err.message);
-        res.status(500).send('Server Error');
+        res.status(500).json({ message: err.message || 'Server Error' });
     }
 };
 
@@ -239,12 +284,8 @@ const listUsers = async (req, res) => {
 // @route   PUT /api/users/:id
 // @access  Admin
 const updateUser = async (req, res) => {
-    const { role } = req.body;
+    const { role, localChurch } = req.body;
     const { id } = req.params;
-
-    if (!role) {
-        return res.status(400).json({ message: 'Role is required' });
-    }
 
     try {
         // Ensure the user being updated is in the same tenant as the admin
@@ -254,18 +295,36 @@ const updateUser = async (req, res) => {
             return res.status(404).json({ message: 'User not found in this tenant' });
         }
 
-        // Prevent an admin from changing their own role
-        if (userToUpdate._id.toString() === req.user.id) {
-            return res.status(400).json({ message: 'Admins cannot change their own role.' });
+        // Prevent a user from changing their own role (avoid self-lockout / privilege games)
+        if (userToUpdate._id.toString() === req.user.id && role && role !== userToUpdate.role) {
+            return res.status(400).json({ message: 'You cannot change your own role.' });
         }
-        
-        userToUpdate.role = role;
+
+        if (role !== undefined) {
+            if (!VALID_ROLES.includes(role)) {
+                return res.status(400).json({ message: `Role must be one of: ${VALID_ROLES.join(', ')}` });
+            }
+            userToUpdate.role = role;
+        }
+
+        // localChurch only applies to scoped roles; parish-level roles are always unscoped.
+        if (localChurch !== undefined) {
+            const effectiveRole = role || userToUpdate.role;
+            userToUpdate.localChurch = (['Treasurer', 'Secretary'].includes(effectiveRole) && localChurch)
+                ? localChurch
+                : undefined;
+        } else if (role && !['Treasurer', 'Secretary'].includes(role)) {
+            userToUpdate.localChurch = undefined; // moving to a parish-level role clears the church
+        }
+
         await userToUpdate.save();
 
-        res.json({ message: 'User role updated successfully.', user: userToUpdate });
+        const safeUser = userToUpdate.toObject();
+        delete safeUser.password;
+        res.json({ message: 'User updated successfully.', user: safeUser });
     } catch (err) {
         console.error(err.message);
-        res.status(500).send('Server Error');
+        res.status(500).json({ message: err.message || 'Server Error' });
     }
 };
 
