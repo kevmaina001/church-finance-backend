@@ -16,6 +16,9 @@ const revenueSourceSchema = new mongoose.Schema({
       message: 'Account must be an active revenue account'
     }
   },
+  // Optional: scope this income category to a single local church. Null/absent = shared
+  // parish-wide (available to every church). Church-scoped ones only appear in that church's context.
+  localChurch: { type: mongoose.Schema.Types.ObjectId, ref: 'LocalChurch' },
   tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true },
 }, { timestamps: true });
 

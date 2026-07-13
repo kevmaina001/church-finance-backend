@@ -16,6 +16,9 @@ const voteheadSchema = new mongoose.Schema({
       message: 'Account must be an active expense account'
     }
   },
+  // Optional: scope this spending category to a single local church. Null/absent = shared
+  // parish-wide (available to every church). Church-scoped ones only appear in that church's context.
+  localChurch: { type: mongoose.Schema.Types.ObjectId, ref: 'LocalChurch' },
   tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true },
 }, { timestamps: true });
 
