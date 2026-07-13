@@ -2,12 +2,13 @@ const express = require('express');
 const { addExpenditure, getExpenditures, updateExpenditure, deleteExpenditure } = require('../controllers/expenditureController');
 const authenticate = require('../middlewares/auth'); // Authentication middleware
 const { requireWrite } = require('../middlewares/permit'); // Block view-only users
+const { forceReadScope } = require('../middlewares/scope'); // Lock church-scoped users to their church
 
 const router = express.Router();
 
 // Writes require a non-view-only role; church scope enforced in the controller.
 router.post('/', authenticate, requireWrite, addExpenditure);
-router.get('/', authenticate, getExpenditures);
+router.get('/', authenticate, forceReadScope, getExpenditures);
 router.put('/:id', authenticate, requireWrite, updateExpenditure);
 router.delete('/:id', authenticate, requireWrite, deleteExpenditure);
 

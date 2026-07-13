@@ -9,10 +9,11 @@ const {
 } = require('../controllers/fundController');
 const authenticate = require('../middlewares/auth');
 const { requireParishLevel } = require('../middlewares/permit');
+const { forceReadScope } = require('../middlewares/scope');
 
-// Reading funds and the fund-balances report is available to any authenticated user
+// Reading funds and the fund-balances report; scoped users see only their church's activity
 router.get('/', authenticate, getFunds);
-router.get('/report', authenticate, getFundReport);
+router.get('/report', authenticate, forceReadScope, getFundReport);
 
 // Creating/editing funds is a parish-wide action
 router.post('/', authenticate, requireParishLevel, addFund);

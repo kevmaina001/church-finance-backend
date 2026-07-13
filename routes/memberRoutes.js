@@ -9,9 +9,10 @@ const {
 } = require('../controllers/memberController');
 const authenticate = require('../middlewares/auth');
 const { requireWrite } = require('../middlewares/permit');
+const { forceReadScope } = require('../middlewares/scope');
 
-// Any authenticated user in the parish can read members and statements (needed by forms/reports)
-router.get('/', authenticate, getMembers);
+// Reads: church-scoped users only see their own church's members.
+router.get('/', authenticate, forceReadScope, getMembers);
 router.get('/:id/statement', authenticate, getMemberStatement);
 
 // Managing members requires a non-view-only role (church scope enforced in controller)

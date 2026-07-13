@@ -96,6 +96,12 @@ exports.getMemberStatement = async (req, res) => {
       .populate({ path: 'localChurch', select: 'name', options: { strictPopulate: false } });
     if (!member) return res.status(404).json({ message: 'Member not found' });
 
+    // Church-scoped users may only view members in their own church.
+    const locked = lockedChurch(req.user);
+    if (locked && String(member.localChurch?._id || member.localChurch || '') !== String(locked)) {
+      return res.status(403).json({ message: 'You can only view members in your own church.' });
+    }
+
     const filter = { member: id, tenantId };
     if (startDate && endDate) {
       filter.date = { $gte: new Date(startDate), $lte: new Date(endDate + 'T23:59:59.999Z') };

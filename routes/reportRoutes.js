@@ -6,12 +6,14 @@ const {
   downloadAggregatedReport
 } = require('../controllers/reportController');
 const authenticate = require('../middlewares/auth');
+const { forceReadScope } = require('../middlewares/scope');
 const Tenant = require('../models/Tenant');
 
 const router = express.Router();
 
-// Apply authentication middleware to all report routes
+// Authenticate, then lock church-scoped users to their own church on every report read.
 router.use(authenticate);
+router.use(forceReadScope);
 
 // Route to fetch all reports (income/expenditure)
 router.get('/reports', getReports);

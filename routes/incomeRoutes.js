@@ -2,6 +2,7 @@ const express = require('express');
 const { addIncome, getIncomes, updateIncome, deleteIncome } = require('../controllers/incomeController');
 const authenticate = require('../middlewares/auth'); // Import authenticate middleware
 const { requireWrite } = require('../middlewares/permit'); // Block view-only users
+const { forceReadScope } = require('../middlewares/scope'); // Lock church-scoped users to their church
 const logAction = require('../middlewares/auditLogger'); // Import auditLogger middleware
 
 const router = express.Router();
@@ -19,6 +20,7 @@ router.post(
 router.get(
   '/',
   authenticate,
+  forceReadScope,
   getIncomes
 );
 
