@@ -20,7 +20,13 @@ exports.getParishOverview = async (req, res) => {
 
     const quotaVh = await Votehead.findOne({ tenantId: tenantStr, name: 'Parish Quota' }).select('_id');
 
-    const [churches, incYear, expYear, incAll, expAll, quotaAgg, budgets] = await Promise.all([
+    // Income/expenditure by calendar month of the record's date, for the year.
+    const byMonth = () => [
+      { $match: { tenantId, year } },
+      { $group: { _id: { $month: '$date' }, total: { $sum: '$amount' } } },
+    ];
+
+    const [churches, incYear, expYear, incAll, expAll, quotaAgg, budgets, incMonthly, expMonthly] = await Promise.all([
       LocalChurch.find({ tenantId: tenantStr, isActive: true }).select('name').sort({ name: 1 }),
       Income.aggregate(groupByChurch({ year })),
       Expenditure.aggregate(groupByChurch({ year })),
@@ -30,6 +36,8 @@ exports.getParishOverview = async (req, res) => {
         ? Expenditure.aggregate(groupByChurch({ year, votehead: quotaVh._id }))
         : Promise.resolve([]),
       Budget.find({ tenantId: tenantStr, year, localChurch: null }), // parish-level budgets
+      Income.aggregate(byMonth()),
+      Expenditure.aggregate(byMonth()),
     ]);
 
     const toMap = (agg) => {
@@ -57,6 +65,12 @@ exports.getParishOverview = async (req, res) => {
     let incomeBudget = 0, expenseBudget = 0;
     budgets.forEach((b) => { if (b.kind === 'income') incomeBudget += b.amount; else expenseBudget += b.amount; });
 
+    // 12-month trend (parish-wide), months 1-12 → Jan..Dec
+    const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthMap = (agg) => { const mm = {}; agg.forEach((a) => { mm[a._id] = a.total; }); return mm; };
+    const imMonth = monthMap(incMonthly), emMonth = monthMap(expMonthly);
+    const monthly = MONTHS.map((name, i) => ({ month: name, income: imMonth[i + 1] || 0, expenditure: emMonth[i + 1] || 0 }));
+
     res.status(200).json({
       year,
       churches: churchRows,
@@ -68,6 +82,7 @@ exports.getParishOverview = async (req, res) => {
         cash: churchRows.reduce((s, c) => s + c.cash, 0) + generalCash,
       },
       budget: { incomeBudget, incomeActual, expenseBudget, expenseActual },
+      monthly,
       quotaTracked: Boolean(quotaVh),
     });
   } catch (error) {
