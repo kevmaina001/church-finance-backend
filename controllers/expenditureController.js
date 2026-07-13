@@ -20,7 +20,7 @@ exports.addExpenditure = async (req, res) => {
   const session = await mongoose.startSession();
   try {
     if (!req.user) return res.status(401).json({ message: 'User not authenticated' });
-    const { votehead, amount, description, year, assetAccount, date, localChurch } = req.body;
+    const { votehead, amount, description, year, assetAccount, date, localChurch, fund } = req.body;
     const tenantId = req.user.tenantId;
     const user = req.user.name;
 
@@ -34,7 +34,7 @@ exports.addExpenditure = async (req, res) => {
     await session.withTransaction(async () => {
       const [expenditure] = await Expenditure.create([{
         votehead, amount, description, year, user, assetAccount,
-        localChurch: localChurch || undefined, tenantId, date: date || new Date(),
+        localChurch: localChurch || undefined, fund: fund || undefined, tenantId, date: date || new Date(),
       }], { session });
       savedExpenditure = expenditure;
 
@@ -67,7 +67,8 @@ exports.getExpenditures = async (req, res) => {
     }
     const expenditures = await Expenditure.find(filter)
       .populate({ path: 'votehead', select: 'name', options: { strictPopulate: false } })
-      .populate({ path: 'localChurch', select: 'name', options: { strictPopulate: false } });
+      .populate({ path: 'localChurch', select: 'name', options: { strictPopulate: false } })
+      .populate({ path: 'fund', select: 'name', options: { strictPopulate: false } });
     res.status(200).json({ expenditures });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -85,13 +86,14 @@ exports.updateExpenditure = async (req, res) => {
     if (!expenditure) return res.status(404).json({ message: 'Expenditure not found' });
 
     // Only these fields may be updated (prevents mass-assignment of tenantId etc.)
-    const { votehead, amount, description, year, assetAccount, localChurch, date } = req.body;
+    const { votehead, amount, description, year, assetAccount, localChurch, fund, date } = req.body;
     if (votehead !== undefined) expenditure.votehead = votehead;
     if (amount !== undefined) expenditure.amount = amount;
     if (description !== undefined) expenditure.description = description;
     if (year !== undefined) expenditure.year = year;
     if (assetAccount !== undefined) expenditure.assetAccount = assetAccount;
     if (localChurch !== undefined) expenditure.localChurch = localChurch || undefined;
+    if (fund !== undefined) expenditure.fund = fund || undefined;
     if (date !== undefined) expenditure.date = date;
     expenditure.user = req.user.name;
 

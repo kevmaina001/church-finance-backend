@@ -20,7 +20,7 @@ exports.addIncome = async (req, res) => {
   const session = await mongoose.startSession();
   try {
     if (!req.user) return res.status(401).json({ message: 'User not authenticated' });
-    const { revenueSource, amount, description, year, assetAccount, localChurch, member } = req.body;
+    const { revenueSource, amount, description, year, assetAccount, localChurch, member, fund } = req.body;
     const tenantId = req.user.tenantId;
     const user = req.user.name;
 
@@ -34,7 +34,7 @@ exports.addIncome = async (req, res) => {
     await session.withTransaction(async () => {
       const [income] = await Income.create([{
         revenueSource, amount, description, year, user, assetAccount,
-        localChurch: localChurch || undefined, member: member || undefined, tenantId,
+        localChurch: localChurch || undefined, member: member || undefined, fund: fund || undefined, tenantId,
       }], { session });
       savedIncome = income;
 
@@ -71,7 +71,8 @@ exports.getIncomes = async (req, res) => {
     const incomes = await Income.find(filter)
       .populate('revenueSource', 'name')
       .populate({ path: 'localChurch', select: 'name', options: { strictPopulate: false } })
-      .populate({ path: 'member', select: 'name', options: { strictPopulate: false } });
+      .populate({ path: 'member', select: 'name', options: { strictPopulate: false } })
+      .populate({ path: 'fund', select: 'name', options: { strictPopulate: false } });
     res.status(200).json({ incomes });
   } catch (error) {
     res.status(500).json({ message: error.message });
@@ -89,7 +90,7 @@ exports.updateIncome = async (req, res) => {
     if (!income) return res.status(404).json({ message: 'Income not found' });
 
     // Only these fields may be updated (prevents mass-assignment of tenantId etc.)
-    const { revenueSource, amount, description, year, assetAccount, localChurch, member, date } = req.body;
+    const { revenueSource, amount, description, year, assetAccount, localChurch, member, fund, date } = req.body;
     if (revenueSource !== undefined) income.revenueSource = revenueSource;
     if (amount !== undefined) income.amount = amount;
     if (description !== undefined) income.description = description;
@@ -97,6 +98,7 @@ exports.updateIncome = async (req, res) => {
     if (assetAccount !== undefined) income.assetAccount = assetAccount;
     if (localChurch !== undefined) income.localChurch = localChurch || undefined;
     if (member !== undefined) income.member = member || undefined;
+    if (fund !== undefined) income.fund = fund || undefined;
     if (date !== undefined) income.date = date;
     income.user = req.user.name;
 

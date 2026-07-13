@@ -10,6 +10,7 @@ const expenditureSchema = new mongoose.Schema({
   user: { type: String, required: true }, // Store user name from `req.user`
   assetAccount: { type: mongoose.Schema.Types.ObjectId, ref: 'Account', required: true }, // Asset account (Cash/Bank)
   localChurch: { type: mongoose.Schema.Types.ObjectId, ref: 'LocalChurch' }, // Which local church this expenditure belongs to (optional = parish-general)
+  fund: { type: mongoose.Schema.Types.ObjectId, ref: 'Fund' }, // Fund this expenditure is drawn from (optional = general/unrestricted)
   tenantId: { type: mongoose.Schema.Types.ObjectId, ref: 'Tenant', required: true },
 });
 

@@ -17,6 +17,7 @@ const tenantRoutes = require('./routes/tenantRoutes');
 const localChurchRoutes = require('./routes/localChurchRoutes');
 const memberRoutes = require('./routes/memberRoutes');
 const budgetRoutes = require('./routes/budgetRoutes');
+const fundRoutes = require('./routes/fundRoutes');
 const app = express();
 
 // Behind Render's proxy: trust the first proxy so rate limiting keys on the real client IP.
@@ -73,6 +74,7 @@ app.use('/api/tenants', tenantRoutes);
 app.use('/api/local-churches', localChurchRoutes);
 app.use('/api/members', memberRoutes);
 app.use('/api/budgets', budgetRoutes);
+app.use('/api/funds', fundRoutes);
 
 
 
