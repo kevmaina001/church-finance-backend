@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 const expenditureSchema = new mongoose.Schema({
   votehead: { type: mongoose.Schema.Types.ObjectId, ref: 'Votehead', required: true }, // Reference to Votehead
   amount: { type: Number, required: true },
-  description: { type: String, required: true },
+  description: { type: String }, // optional
   year: { type: Number, default: new Date().getFullYear() },
   date: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now },
